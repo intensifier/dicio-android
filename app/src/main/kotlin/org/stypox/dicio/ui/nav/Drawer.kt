@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -32,7 +33,7 @@ import org.stypox.dicio.R
 @Composable
 fun DrawerContent(
     onSettingsClick: () -> Unit,
-    onSpeechToTextServiceClick: () -> Unit,
+    onSpeechToTextPopupClick: () -> Unit,
     closeDrawer: () -> Unit,
 ) {
     ModalDrawerSheet(
@@ -51,14 +52,16 @@ fun DrawerContent(
                 onSettingsClick()
                 closeDrawer()
             },
-            modifier = Modifier.padding(horizontal = 12.dp),
+            modifier = Modifier
+                .padding(horizontal = 12.dp)
+                .testTag("settings_drawer_item"),
         )
 
         DrawerItem(
             icon = Icons.Default.RecordVoiceOver,
-            label = R.string.stt_service,
+            label = R.string.stt_popup,
             onClick = {
-                onSpeechToTextServiceClick()
+                onSpeechToTextPopupClick()
                 closeDrawer()
             },
             modifier = Modifier.padding(horizontal = 12.dp),
@@ -69,7 +72,7 @@ fun DrawerContent(
 @Preview
 @Composable
 private fun DrawerContentPreview() {
-    DrawerContent(onSettingsClick = {}, onSpeechToTextServiceClick = {}, closeDrawer = {})
+    DrawerContent(onSettingsClick = {}, onSpeechToTextPopupClick = {}, closeDrawer = {})
 }
 
 @Preview

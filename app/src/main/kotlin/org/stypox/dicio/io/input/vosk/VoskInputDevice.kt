@@ -40,11 +40,14 @@ import org.stypox.dicio.util.useEntries
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.stypox.dicio.di.LocaleManager
@@ -163,8 +166,14 @@ class VoskInputDevice(
         val prevState = _state.getAndUpdate { NotInitialized }
         when (prevState) {
             // either interrupt the current
-            is Downloading -> operationsJob?.cancel()
-            is Unzipping -> operationsJob?.cancel()
+            is Downloading -> {
+                operationsJob?.cancel()
+                operationsJob?.join()
+            }
+            is Unzipping -> {
+                operationsJob?.cancel()
+                operationsJob?.join()
+            }
             is Loading -> {
                 operationsJob?.join()
                 when (val s = _state.getAndUpdate { NotInitialized }) {
@@ -211,13 +220,20 @@ class VoskInputDevice(
      *
      * @param thenStartListeningEventListener if not `null`, causes the [VoskInputDevice] to start
      * listening after it has finished loading, and the received input events are sent there
+     * @return `true` if the input device will start listening (or be ready to do so in case
+     * `thenStartListeningEventListener == null`) at some point,
+     * `false` if manual user intervention is required to start listening
      */
-    override fun tryLoad(thenStartListeningEventListener: ((InputEvent) -> Unit)?) {
+    override fun tryLoad(thenStartListeningEventListener: ((InputEvent) -> Unit)?): Boolean {
         val s = _state.value
         if (s == NotLoaded) {
             load(thenStartListeningEventListener)
+            return true
         } else if (thenStartListeningEventListener != null && s is Loaded) {
             startListening(s.speechService, thenStartListeningEventListener)
+            return true
+        } else {
+            return false
         }
     }
 
@@ -249,6 +265,16 @@ class VoskInputDevice(
             is ErrorLoading -> load(eventListener) // retry
             is Loaded -> startListening(s.speechService, eventListener)
             is Listening -> stopListening(s.speechService, s.eventListener, true)
+        }
+    }
+
+    /**
+     * If the recognizer is currently listening, stops listening. Otherwise does nothing.
+     */
+    override fun stopListening() {
+        when (val s = _state.value) {
+            is Listening -> stopListening(s.speechService, s.eventListener, true)
+            else -> {}
         }
     }
 
@@ -305,17 +331,21 @@ class VoskInputDevice(
      * Will set the state to [ErrorUnzipping] or [NotLoaded] in the end. Also deletes the zip
      * file once downloading is successfully complete, to save disk space.
      */
-    private fun unzipImpl() {
+    private suspend fun unzipImpl() {
         try {
             // delete the model directory in case there are leftover files from other models
             modelDirectory.deleteRecursively()
 
             ZipInputStream(modelZipFile.inputStream()).useEntries { entry ->
-                val destinationFile = getDestinationFile(modelDirectory, entry.name)
+                val destinationFile = withContext(Dispatchers.IO) {
+                    getDestinationFile(modelDirectory, entry.name)
+                }
 
                 if (entry.isDirectory) {
                     // create directory
-                    if (!destinationFile.mkdirs() && !destinationFile.isDirectory) {
+                    if (withContext(Dispatchers.IO) {
+                        !destinationFile.exists() && !destinationFile.mkdirs()
+                    }) {
                         throw IOException("mkdirs failed: $destinationFile")
                     }
                     return@useEntries
@@ -329,6 +359,7 @@ class VoskInputDevice(
                     _state.value = Unzipping(0, entry.size)
 
                     while (read(buffer).also { length = it } > 0) {
+                        yield() // manually yield because the input/output streams are blocking
                         outputStream.write(buffer, 0, length)
                         currentBytes += length
                         _state.value = Unzipping(currentBytes, entry.size)
@@ -358,7 +389,7 @@ class VoskInputDevice(
      * if the user clicked on the button while loading).
      */
     private fun load(thenStartListeningEventListener: ((InputEvent) -> Unit)?) {
-        _state.value = Loading(thenStartListeningEventListener != null)
+        _state.value = Loading(thenStartListeningEventListener)
 
         operationsJob = scope.launch {
             val speechService: SpeechService
@@ -374,22 +405,25 @@ class VoskInputDevice(
                 return@launch
             }
 
-            if (!_state.compareAndSet(Loading(false), Loaded(speechService))) {
-                if (thenStartListeningEventListener != null &&
-                        // this will always be true except when the load() is begin joined by init()
-                        _state.value == Loading(true)) {
-                    // If the state wasn't thenStartListening=false, then thenStartListening=true
-                    // (which implies thenStartListeningEventListener != null but kotlin doesn't
-                    // know it). compareAndSet() is used in conjunction with
-                    // toggleThenStartListening() to ensure atomicity.
-                    startListening(speechService, thenStartListeningEventListener)
-                } else {
-                    // load() is begin joined by init(), which is reinitializing everything,
-                    // drop the speechService
+            if (!_state.compareAndSet(Loading(null), Loaded(speechService))) {
+                val state = _state.value
+                if (state is Loading && state.thenStartListening != null) {
+                    // "state is Loading" will always be true except when the load() is begin
+                    // joined by init().
+                    // "state.thenStartListening" might be "null" if, in the brief moment between
+                    // the compareAndSet() and reading _state.value, the state was changed by
+                    // toggleThenStartListening().
+                    startListening(speechService, state.thenStartListening)
+
+                } else if (!_state.compareAndSet(Loading(null, true), Loaded(speechService))) {
+                    // The current state is not the Loading state, which is unexpected. This means
+                    // that load() is begin joined by init(), which is reinitializing everything,
+                    // so we should drop the speechService.
                     speechService.stop()
                     speechService.shutdown()
                 }
-            }
+
+            } // else, the state was set to Loaded, so no need to do anything
         }
     }
 
@@ -404,8 +438,8 @@ class VoskInputDevice(
      */
     private fun toggleThenStartListening(eventListener: (InputEvent) -> Unit) {
         if (
-            !_state.compareAndSet(Loading(false), Loading(true)) &&
-            !_state.compareAndSet(Loading(true), Loading(false))
+            !_state.compareAndSet(Loading(null), Loading(eventListener)) &&
+            !_state.compareAndSet(Loading(eventListener), Loading(null))
         ) {
             // may happen if load() changes the state in the brief moment between when the state is
             // first checked before calling this function, and when the checks above are performed

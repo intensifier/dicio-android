@@ -29,9 +29,9 @@ android {
         applicationId = "org.stypox.dicio"
         minSdk = 21
         targetSdk = 34
-        versionCode = 10
-        versionName = "0.10"
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        versionCode = 11
+        versionName = "1.0"
+        testInstrumentationRunner = "org.stypox.dicio.CustomTestRunner"
 
         vectorDrawables.useSupportLibrary = true
 
@@ -55,12 +55,12 @@ android {
         // Flag to enable support for the new language APIs
         isCoreLibraryDesugaringEnabled = true
 
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.toVersion(libs.versions.java.get())
+        targetCompatibility = JavaVersion.toVersion(libs.versions.java.get())
     }
 
     kotlinOptions {
-        jvmTarget = "17"
+        jvmTarget = libs.versions.java.get()
     }
 
     buildFeatures {
@@ -80,7 +80,7 @@ tasks.withType<Test>().configureEach {
 
 protobuf {
     protoc {
-        libs.protobuf.protoc.get().toString()
+        artifact = libs.protobuf.protoc.get().toString()
     }
     plugins {
         generateProtoTasks {
@@ -140,7 +140,7 @@ dependencies {
     implementation(libs.hilt.navigation.compose)
     ksp(libs.hilt.android.compiler)
     androidTestImplementation(libs.hilt.android.testing)
-    androidTestAnnotationProcessor(libs.hilt.android.compiler)
+    //androidTestAnnotationProcessor(libs.hilt.android.compiler)
     testImplementation(libs.hilt.android.testing)
     testAnnotationProcessor(libs.hilt.android.compiler)
 
@@ -176,4 +176,15 @@ dependencies {
     testImplementation(libs.kotest.runner.junit5)
     testImplementation(libs.kotest.assertions.core)
     testImplementation(libs.kotest.property)
+    androidTestImplementation(libs.test.runner)
+    androidTestImplementation(libs.test.rules)
+    androidTestImplementation(libs.test.ui.automator)
+}
+
+// this is required to avoid NoClassDefFoundError for ActivityInvoker during androidTest
+// https://github.com/android/android-test/issues/2247#issuecomment-2194435444
+configurations.configureEach {
+    resolutionStrategy {
+        force(libs.test.core)
+    }
 }
