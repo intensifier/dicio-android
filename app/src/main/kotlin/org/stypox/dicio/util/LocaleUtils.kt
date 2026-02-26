@@ -1,12 +1,10 @@
 package org.stypox.dicio.util
 
-import android.content.Context
-import androidx.core.os.ConfigurationCompat
 import androidx.core.os.LocaleListCompat
-import org.stypox.dicio.settings.datastore.Language
 import java.util.Locale
 
 object LocaleUtils {
+
     /**
      * Basically implements Android locale resolution (not sure if exactly the same, probably,
      * though), so it tries, in this order:<br></br>
@@ -26,7 +24,7 @@ object LocaleUtils {
      * @throws UnsupportedLocaleException if the locale resolution failed.
      */
     @Throws(UnsupportedLocaleException::class)
-    fun resolveSupportedLocale(
+    fun resolveSupportedLocaleOrThrow(
         availableLocales: LocaleListCompat,
         supportedLocales: Collection<String>
     ): LocaleResolutionResult {
@@ -51,66 +49,114 @@ object LocaleUtils {
     }
 
     /**
-     * @see resolveSupportedLocale
+     * @see resolveSupportedLocaleOrThrow
      */
     @Throws(UnsupportedLocaleException::class)
     fun resolveLocaleString(
         locale: Locale,
         supportedLocales: Collection<String>
     ): String {
-        // first try with full locale name (e.g. en-US)
-        var localeString = (locale.language + "-" + locale.country).lowercase(Locale.getDefault())
-        if (supportedLocales.contains(localeString)) {
-            return localeString
+        // normalize the locales so that they are lowercase and use a dash as a separator
+        val normalizedLocales = supportedLocales.associateBy {
+            it.lowercase().replace('_', '-')
         }
+
+        // first try with full locale name (e.g. en-US)
+        val full = (locale.language + "-" + locale.country).lowercase()
+        normalizedLocales[full]?.let { return it }
 
         // then try with only base language (e.g. en)
-        localeString = locale.language.lowercase(Locale.getDefault())
-        if (supportedLocales.contains(localeString)) {
-            return localeString
-        }
+        val onlyLanguage = locale.language.lowercase()
+        normalizedLocales[onlyLanguage]?.let { return it }
 
-        // then try with children languages of locale base language (e.g. en-US, en-GB, en-UK, ...)
-        for (supportedLocalePlus in supportedLocales) {
-            for (supportedLocale in supportedLocalePlus.split("\\+".toRegex())
-                .dropLastWhile { it.isEmpty() }
-                .toTypedArray()) {
-                if (supportedLocale.split("-".toRegex(), limit = 2)
-                        .toTypedArray()[0] == localeString
-                ) {
-                    return supportedLocalePlus
+        // then try with children languages of locale base language (e.g. en-US, en-GB, b+en+001, …)
+        for ((supportedLocalePlus, originalSupportedLocale) in normalizedLocales) {
+            for (supportedLocale in supportedLocalePlus.split("[+#]".toRegex())) {
+                if (supportedLocale.split("-".toRegex(), limit = 2)[0] == onlyLanguage) {
+                    return originalSupportedLocale
                 }
             }
         }
+
         throw UnsupportedLocaleException(locale)
     }
 
-    fun getAvailableLocalesFromLanguage(context: Context, language: Language): LocaleListCompat {
-        return when (language) {
-            Language.LANGUAGE_SYSTEM,
-            Language.UNRECOGNIZED -> {
-                ConfigurationCompat.getLocales(context.resources.configuration)
-            }
-            else -> {
-                val languageCountry = language
-                    .toString()
-                    .lowercase()
-                    .split("_".toRegex())
-                    .drop(1)
-                    .dropLastWhile { it.isEmpty() }
-                    .toTypedArray()
-                if (languageCountry.size == 1) {
-                    LocaleListCompat.create(Locale(languageCountry[0]))
-                } else {
-                    LocaleListCompat.create(
-                        Locale(
-                            languageCountry[0],
-                            languageCountry[1]
-                        )
-                    )
-                }
-            }
+    /**
+     * Parses a `LANGUAGE` or `LANGUAGE_COUNTRY` string string into a [Locale],
+     * e.g. "EN" -> [Locale]`("en")`, "EN_IN" -> [Locale]`("en", "in")`.
+     */
+    fun parseLanguageCountry(languageCountry: String): Locale {
+        val languageCountryArr = languageCountry
+            .lowercase()
+            .split("[_-]".toRegex())
+
+        return if (languageCountryArr.size == 1) {
+            Locale.Builder()
+                .setLanguage(languageCountryArr[0])
+                .build()
+        } else {
+            Locale.Builder()
+                .setLanguage(languageCountryArr[0])
+                .setRegion(languageCountryArr[1])
+                .build()
         }
+    }
+
+    /**
+     * Like [resolveSupportedLocaleOrThrow], but returns null instead of throwing an exception.
+     */
+    fun resolveSupportedLocale(
+        availableLocales: LocaleListCompat,
+        supportedLocales: Collection<String>
+    ): LocaleResolutionResult? {
+        return try {
+            resolveSupportedLocaleOrThrow(availableLocales, supportedLocales)
+        } catch (_: UnsupportedLocaleException) {
+            null
+        }
+    }
+
+    /**
+     * Uses [resolveSupportedLocaleOrThrow] to find a supported locale string in [supportedLocales]
+     * matching [currentLocale], and returns it. This is NOT meant to be used for locale resolution
+     * when the app starts, but only to select the correct item from a list using the app's current
+     * locale (that has already been determined, hence the parameter name [currentLocale]).
+     */
+    fun resolveSupportedLocale(
+        currentLocale: Locale,
+        supportedLocales: Collection<String>
+    ): String? {
+        return resolveSupportedLocale(
+            availableLocales = LocaleListCompat.create(currentLocale),
+            supportedLocales = supportedLocales
+        )?.supportedLocaleString
+    }
+
+    /**
+     * Uses [resolveSupportedLocale] to find a supported locale string matching [currentLocale] in
+     * the keys of [supportedLocalesAndValues], and returns the corresponding value.
+     */
+    fun <T> resolveValueForSupportedLocale(
+        currentLocale: Locale,
+        supportedLocalesAndValues: Map<String, T>
+    ): T? {
+        return resolveSupportedLocale(
+            availableLocales = LocaleListCompat.create(currentLocale),
+            supportedLocales = supportedLocalesAndValues.keys
+        )?.let {
+            supportedLocalesAndValues[it.supportedLocaleString]
+        }
+    }
+
+    /**
+     * Returns whether the [currentLocale] matches with any of the [supportedLocales] using
+     * [resolveSupportedLocale].
+     */
+    fun isLocaleSupported(currentLocale: Locale, supportedLocales: List<String>): Boolean {
+        return resolveSupportedLocale(
+            LocaleListCompat.create(currentLocale),
+            supportedLocales
+        ) != null
     }
 
     class UnsupportedLocaleException : Exception {

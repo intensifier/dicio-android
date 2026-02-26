@@ -21,22 +21,7 @@ package org.stypox.dicio.io.input.vosk
 
 import android.content.Context
 import android.util.Log
-import androidx.core.os.LocaleListCompat
 import dagger.hilt.android.qualifiers.ApplicationContext
-import org.stypox.dicio.io.input.vosk.VoskState.Downloaded
-import org.stypox.dicio.io.input.vosk.VoskState.Downloading
-import org.stypox.dicio.io.input.vosk.VoskState.ErrorDownloading
-import org.stypox.dicio.io.input.vosk.VoskState.ErrorLoading
-import org.stypox.dicio.io.input.vosk.VoskState.ErrorUnzipping
-import org.stypox.dicio.io.input.vosk.VoskState.Listening
-import org.stypox.dicio.io.input.vosk.VoskState.Loaded
-import org.stypox.dicio.io.input.vosk.VoskState.Loading
-import org.stypox.dicio.io.input.vosk.VoskState.NotDownloaded
-import org.stypox.dicio.io.input.vosk.VoskState.NotLoaded
-import org.stypox.dicio.io.input.vosk.VoskState.Unzipping
-import org.stypox.dicio.util.downloadBinaryFileWithPartial
-import org.stypox.dicio.util.getDestinationFile
-import org.stypox.dicio.util.useEntries
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -46,32 +31,45 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
-import okhttp3.Request
+import org.stypox.dicio.BuildConfig
 import org.stypox.dicio.di.LocaleManager
 import org.stypox.dicio.io.input.InputEvent
 import org.stypox.dicio.io.input.SttInputDevice
+import org.stypox.dicio.io.input.SttState
+import org.stypox.dicio.io.input.vosk.VoskState.Downloaded
+import org.stypox.dicio.io.input.vosk.VoskState.Downloading
+import org.stypox.dicio.io.input.vosk.VoskState.ErrorDownloading
+import org.stypox.dicio.io.input.vosk.VoskState.ErrorLoading
+import org.stypox.dicio.io.input.vosk.VoskState.ErrorUnzipping
+import org.stypox.dicio.io.input.vosk.VoskState.Listening
+import org.stypox.dicio.io.input.vosk.VoskState.Loaded
+import org.stypox.dicio.io.input.vosk.VoskState.Loading
 import org.stypox.dicio.io.input.vosk.VoskState.NotAvailable
+import org.stypox.dicio.io.input.vosk.VoskState.NotDownloaded
 import org.stypox.dicio.io.input.vosk.VoskState.NotInitialized
-import org.stypox.dicio.ui.home.SttState
+import org.stypox.dicio.io.input.vosk.VoskState.NotLoaded
+import org.stypox.dicio.io.input.vosk.VoskState.Unzipping
+import org.stypox.dicio.settings.datastore.UserSettings
+import org.stypox.dicio.ui.util.Progress
+import org.stypox.dicio.util.FileToDownload
 import org.stypox.dicio.util.LocaleUtils
 import org.stypox.dicio.util.distinctUntilChangedBlockingFirst
-import org.vosk.BuildConfig
+import org.stypox.dicio.util.downloadBinaryFilesWithPartial
+import org.stypox.dicio.util.extractZip
 import org.vosk.LibVosk
 import org.vosk.LogLevel
 import org.vosk.Model
 import org.vosk.Recognizer
 import org.vosk.android.SpeechService
-import java.io.BufferedOutputStream
 import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
 import java.util.Locale
-import java.util.zip.ZipInputStream
 
 class VoskInputDevice(
     @ApplicationContext appContext: Context,
     private val okHttpClient: OkHttpClient,
     localeManager: LocaleManager,
+    private val silencesBeforeStop: StateFlow<Int>
 ) : SttInputDevice {
 
     private val _state: MutableStateFlow<VoskState>
@@ -87,7 +85,6 @@ class VoskInputDevice(
     private val sameModelUrlCheck: File get() = File(filesDir, "vosk-model-url")
     private val modelDirectory: File get() = File(filesDir, "vosk-model")
     private val modelExistFileCheck: File get() = File(modelDirectory, "ivector")
-
 
     init {
         // Run blocking, because the locale is always available right away since LocaleManager also
@@ -113,20 +110,12 @@ class VoskInputDevice(
 
     private fun init(locale: Locale): VoskState {
         // choose the model url based on the locale
-        val modelUrl = try {
-            val localeResolutionResult = LocaleUtils.resolveSupportedLocale(
-                LocaleListCompat.create(locale),
-                MODEL_URLS.keys
-            )
-            MODEL_URLS[localeResolutionResult.supportedLocaleString]
-        } catch (e: LocaleUtils.UnsupportedLocaleException) {
-            null
-        }
+        val modelUrl = LocaleUtils.resolveValueForSupportedLocale(locale, MODEL_URLS)
 
         // the model url may change if the user changes app language, or in case of model updates
         val modelUrlChanged = try {
             sameModelUrlCheck.readText() != modelUrl
-        } catch (e: IOException) {
+        } catch (_: IOException) {
             // modelUrlCheck file does not exist
             true
         }
@@ -163,8 +152,14 @@ class VoskInputDevice(
         val prevState = _state.getAndUpdate { NotInitialized }
         when (prevState) {
             // either interrupt the current
-            is Downloading -> operationsJob?.cancel()
-            is Unzipping -> operationsJob?.cancel()
+            is Downloading -> {
+                operationsJob?.cancel()
+                operationsJob?.join()
+            }
+            is Unzipping -> {
+                operationsJob?.cancel()
+                operationsJob?.join()
+            }
             is Loading -> {
                 operationsJob?.join()
                 when (val s = _state.getAndUpdate { NotInitialized }) {
@@ -211,13 +206,20 @@ class VoskInputDevice(
      *
      * @param thenStartListeningEventListener if not `null`, causes the [VoskInputDevice] to start
      * listening after it has finished loading, and the received input events are sent there
+     * @return `true` if the input device will start listening (or be ready to do so in case
+     * `thenStartListeningEventListener == null`) at some point,
+     * `false` if manual user intervention is required to start listening
      */
-    override fun tryLoad(thenStartListeningEventListener: ((InputEvent) -> Unit)?) {
+    override fun tryLoad(thenStartListeningEventListener: ((InputEvent) -> Unit)?): Boolean {
         val s = _state.value
-        if (s == NotLoaded) {
+        if (s == NotLoaded || s is ErrorLoading) {
             load(thenStartListeningEventListener)
+            return true
         } else if (thenStartListeningEventListener != null && s is Loaded) {
             startListening(s.speechService, thenStartListeningEventListener)
+            return true
+        } else {
+            return false
         }
     }
 
@@ -253,37 +255,45 @@ class VoskInputDevice(
     }
 
     /**
+     * If the recognizer is currently listening, stops listening. Otherwise does nothing.
+     */
+    override fun stopListening() {
+        when (val s = _state.value) {
+            is Listening -> stopListening(s.speechService, s.eventListener, true)
+            else -> {}
+        }
+    }
+
+    /**
      * Downloads the model zip file. Sets the state to [Downloading], and periodically updates it
      * with downloading progress, until either [ErrorDownloading] or [Downloaded] are set as state.
      */
     private fun download(modelUrl: String) {
-        _state.value = Downloading(0, 0)
+        _state.value = Downloading(Progress.UNKNOWN)
 
         operationsJob = scope.launch(Dispatchers.IO) {
             try {
-                val request: Request = Request.Builder().url(modelUrl).build()
-                val response = okHttpClient.newCall(request).execute()
-
-                downloadBinaryFileWithPartial(
-                    response = response,
-                    file = modelZipFile,
+                downloadBinaryFilesWithPartial(
+                    urlsFiles = listOf(FileToDownload(modelUrl, modelZipFile, sameModelUrlCheck)),
+                    httpClient = okHttpClient,
                     cacheDir = cacheDir,
-                ) { currentBytes, totalBytes ->
-                    _state.value = Downloading(currentBytes, totalBytes)
+                ) { progress ->
+                    _state.value = Downloading(progress)
                 }
 
-                // now that the zip file with the correct model url is in place, we can safely
-                // update the model url saved to disk, since even if the app were closed after this
+                // downloadBinaryFilesWithPartial will update the sameModelUrlCheck file contents
+                // with the correct model url. We can do this safely now that the zip file with the
+                // correct model url is in place, since even if the app were closed after this
                 // step, the correct .zip will be extracted afterwards, even if modelExistFileCheck
-                // already exists
-                sameModelUrlCheck.writeText(modelUrl)
+                // already exists.
+
             } catch (e: IOException) {
                 Log.e(TAG, "Can't download Vosk model", e)
                 _state.value = ErrorDownloading(modelUrl, e)
                 return@launch
             }
 
-            _state.value = Unzipping(0, 0)
+            _state.value = Unzipping(Progress.UNKNOWN)
             unzipImpl() // reuse same job
         }
     }
@@ -292,7 +302,7 @@ class VoskInputDevice(
      * Sets the state to [Unzipping] and calls [unzipImpl] in the background.
      */
     private fun unzip() {
-        _state.value = Unzipping(0, 0)
+        _state.value = Unzipping(Progress.UNKNOWN)
 
         operationsJob = scope.launch {
             unzipImpl()
@@ -305,38 +315,17 @@ class VoskInputDevice(
      * Will set the state to [ErrorUnzipping] or [NotLoaded] in the end. Also deletes the zip
      * file once downloading is successfully complete, to save disk space.
      */
-    private fun unzipImpl() {
+    private suspend fun unzipImpl() {
         try {
             // delete the model directory in case there are leftover files from other models
             modelDirectory.deleteRecursively()
-
-            ZipInputStream(modelZipFile.inputStream()).useEntries { entry ->
-                val destinationFile = getDestinationFile(modelDirectory, entry.name)
-
-                if (entry.isDirectory) {
-                    // create directory
-                    if (!destinationFile.mkdirs() && !destinationFile.isDirectory) {
-                        throw IOException("mkdirs failed: $destinationFile")
-                    }
-                    return@useEntries
-                }
-
-                // else copy file
-                BufferedOutputStream(FileOutputStream(destinationFile)).use { outputStream ->
-                    val buffer = ByteArray(CHUNK_SIZE)
-                    var length: Int
-                    var currentBytes: Long = 0
-                    _state.value = Unzipping(0, entry.size)
-
-                    while (read(buffer).also { length = it } > 0) {
-                        outputStream.write(buffer, 0, length)
-                        currentBytes += length
-                        _state.value = Unzipping(currentBytes, entry.size)
-                    }
-                    outputStream.flush()
-                }
+            extractZip(
+                sourceZip = modelZipFile,
+                destinationDirectory = modelDirectory,
+            ) { progress ->
+                _state.value = Unzipping(progress)
             }
-        } catch (e: IOException) {
+        } catch (e: Throwable) {
             Log.e(TAG, "Can't unzip Vosk model", e)
             _state.value = ErrorUnzipping(e)
             return
@@ -358,7 +347,7 @@ class VoskInputDevice(
      * if the user clicked on the button while loading).
      */
     private fun load(thenStartListeningEventListener: ((InputEvent) -> Unit)?) {
-        _state.value = Loading(thenStartListeningEventListener != null)
+        _state.value = Loading(thenStartListeningEventListener)
 
         operationsJob = scope.launch {
             val speechService: SpeechService
@@ -374,22 +363,25 @@ class VoskInputDevice(
                 return@launch
             }
 
-            if (!_state.compareAndSet(Loading(false), Loaded(speechService))) {
-                if (thenStartListeningEventListener != null &&
-                        // this will always be true except when the load() is begin joined by init()
-                        _state.value == Loading(true)) {
-                    // If the state wasn't thenStartListening=false, then thenStartListening=true
-                    // (which implies thenStartListeningEventListener != null but kotlin doesn't
-                    // know it). compareAndSet() is used in conjunction with
-                    // toggleThenStartListening() to ensure atomicity.
-                    startListening(speechService, thenStartListeningEventListener)
-                } else {
-                    // load() is begin joined by init(), which is reinitializing everything,
-                    // drop the speechService
+            if (!_state.compareAndSet(Loading(null), Loaded(speechService))) {
+                val state = _state.value
+                if (state is Loading && state.thenStartListening != null) {
+                    // "state is Loading" will always be true except when the load() is begin
+                    // joined by init().
+                    // "state.thenStartListening" might be "null" if, in the brief moment between
+                    // the compareAndSet() and reading _state.value, the state was changed by
+                    // toggleThenStartListening().
+                    startListening(speechService, state.thenStartListening)
+
+                } else if (!_state.compareAndSet(Loading(null, true), Loaded(speechService))) {
+                    // The current state is not the Loading state, which is unexpected. This means
+                    // that load() is begin joined by init(), which is reinitializing everything,
+                    // so we should drop the speechService.
                     speechService.stop()
                     speechService.shutdown()
                 }
-            }
+
+            } // else, the state was set to Loaded, so no need to do anything
         }
     }
 
@@ -404,8 +396,8 @@ class VoskInputDevice(
      */
     private fun toggleThenStartListening(eventListener: (InputEvent) -> Unit) {
         if (
-            !_state.compareAndSet(Loading(false), Loading(true)) &&
-            !_state.compareAndSet(Loading(true), Loading(false))
+            !_state.compareAndSet(Loading(null), Loading(eventListener)) &&
+            !_state.compareAndSet(Loading(eventListener), Loading(null))
         ) {
             // may happen if load() changes the state in the brief moment between when the state is
             // first checked before calling this function, and when the checks above are performed
@@ -429,7 +421,7 @@ class VoskInputDevice(
         eventListener: (InputEvent) -> Unit,
     ) {
         _state.value = Listening(speechService, eventListener)
-        speechService.startListening(VoskListener(this, eventListener, speechService))
+        speechService.startListening(VoskListener(this, eventListener, silencesBeforeStop.value, speechService))
     }
 
     /**
@@ -455,7 +447,6 @@ class VoskInputDevice(
     }
 
     companion object {
-        private const val CHUNK_SIZE = 1024 * 256 // 0.25 MB
         private const val SAMPLE_RATE = 44100.0f
         private const val ALTERNATIVE_COUNT = 5
         private val TAG = VoskInputDevice::class.simpleName
@@ -473,14 +464,17 @@ class VoskInputDevice(
             "es" to "https://alphacephei.com/vosk/models/vosk-model-small-es-0.42.zip",
             "pt" to "https://alphacephei.com/vosk/models/vosk-model-small-pt-0.3.zip",
             "tr" to "https://alphacephei.com/vosk/models/vosk-model-small-tr-0.3.zip",
-            "vn" to "https://alphacephei.com/vosk/models/vosk-model-small-vn-0.3.zip",
+            "vn" to "https://alphacephei.com/vosk/models/vosk-model-small-vn-0.4.zip",
             "it" to "https://alphacephei.com/vosk/models/vosk-model-small-it-0.22.zip",
             "nl" to "https://alphacephei.com/vosk/models/vosk-model-small-nl-0.22.zip",
             "ca" to "https://alphacephei.com/vosk/models/vosk-model-small-ca-0.4.zip",
-            "fa" to "https://alphacephei.com/vosk/models/vosk-model-small-fa-0.4.zip",
+            "ar" to "https://alphacephei.com/vosk/models/vosk-model-ar-mgb2-0.4.zip",
+            "ar-tn" to "https://alphacephei.com/vosk/models/vosk-model-small-ar-tn-0.1-linto.zip",
+            "fa" to "https://alphacephei.com/vosk/models/vosk-model-small-fa-0.42.zip",
             "ph" to "https://alphacephei.com/vosk/models/vosk-model-tl-ph-generic-0.6.zip",
             "uk" to "https://alphacephei.com/vosk/models/vosk-model-small-uk-v3-nano.zip",
             "kz" to "https://alphacephei.com/vosk/models/vosk-model-small-kz-0.15.zip",
+            "sv" to "https://alphacephei.com/vosk/models/vosk-model-small-sv-rhasspy-0.15.zip",
             "ja" to "https://alphacephei.com/vosk/models/vosk-model-small-ja-0.22.zip",
             "eo" to "https://alphacephei.com/vosk/models/vosk-model-small-eo-0.42.zip",
             "hi" to "https://alphacephei.com/vosk/models/vosk-model-small-hi-0.22.zip",
@@ -488,6 +482,10 @@ class VoskInputDevice(
             "pl" to "https://alphacephei.com/vosk/models/vosk-model-small-pl-0.22.zip",
             "uz" to "https://alphacephei.com/vosk/models/vosk-model-small-uz-0.22.zip",
             "ko" to "https://alphacephei.com/vosk/models/vosk-model-small-ko-0.22.zip",
+            "br" to "https://alphacephei.com/vosk/models/vosk-model-br-0.8.zip",
+            "gu" to "https://alphacephei.com/vosk/models/vosk-model-small-gu-0.42.zip",
+            "tg" to "https://alphacephei.com/vosk/models/vosk-model-small-tg-0.22.zip",
+            "te" to "https://alphacephei.com/vosk/models/vosk-model-small-te-0.42.zip",
         )
     }
 }

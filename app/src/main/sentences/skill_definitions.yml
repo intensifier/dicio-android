@@ -37,6 +37,19 @@ skills:
           - id: where
             type: string
 
+  - id: media
+    specificity: high
+    sentences:
+      - id: play
+      - id: pause
+      - id: previous
+      - id: next
+
+  - id: joke
+    specificity: high
+    sentences:
+      - id: command
+
   - id: open
     specificity: medium
     sentences:
@@ -44,6 +57,23 @@ skills:
         captures:
           - id: what
             type: string
+
+  - id: listening
+    specificity: high
+    sentences:
+      - id: stop
+      - id: start
+
+  - id: notify
+    specificity: high
+    sentences:
+      - id: notifications
+
+  - id: flashlight
+    specificity: high
+    sentences:
+      - id: turn_on
+      - id: turn_off
 
   - id: search
     specificity: low
@@ -91,4 +121,16 @@ skills:
       - id: current
         captures:
           - id: where
+            type: string
+
+  - id: translation
+    specificity: high
+    sentences:
+      - id: translate
+        captures:
+          - id: query
+            type: string
+          - id: source
+            type: string
+          - id: target
             type: string

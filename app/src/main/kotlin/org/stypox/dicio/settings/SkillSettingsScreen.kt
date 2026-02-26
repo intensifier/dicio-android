@@ -1,12 +1,9 @@
 package org.stypox.dicio.settings
 
 import android.app.Application
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -30,11 +27,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -42,26 +37,30 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.tooling.preview.PreviewParameter
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import dev.shreyaspatil.permissionflow.compose.rememberPermissionFlowRequestLauncher
 import org.dicio.skill.skill.SkillInfo
 import org.stypox.dicio.R
 import org.stypox.dicio.di.SkillContextImpl
-import org.stypox.dicio.settings.datastore.UserSettingsModule.Companion.newDataStoreForPreviews
 import org.stypox.dicio.eval.SkillHandler
+import org.stypox.dicio.settings.datastore.UserSettingsModule.Companion.newDataStoreForPreviews
 import org.stypox.dicio.skills.lyrics.LyricsInfo
 import org.stypox.dicio.skills.search.SearchInfo
 import org.stypox.dicio.skills.weather.WeatherInfo
-import org.stypox.dicio.skills.weather.WeatherSkill
 import org.stypox.dicio.ui.theme.AppTheme
 import org.stypox.dicio.ui.util.SkillInfoPreviews
-import org.stypox.dicio.util.PermissionUtils
 import org.stypox.dicio.util.ShareUtils
+import org.stypox.dicio.util.getNonGrantedPermissions
+import org.stypox.dicio.util.commaJoinPermissions
+import org.stypox.dicio.util.requestAnyPermission
 
 const val DICIO_NUMBERS_LINK = "https://github.com/Stypox/dicio-numbers"
 
@@ -151,8 +150,9 @@ fun SkillSettingsItem(
     expanded: Boolean,
     toggleExpanded: () -> Unit,
 ) {
-    val canExpand = isAvailable &&
-            (skill.renderSettings != null || skill.neededPermissions.isNotEmpty())
+    val canExpand = isAvailable && (
+        skill.renderSettings != null || skill.neededPermissions.isNotEmpty()
+    )
 
     Card(
         modifier = Modifier
@@ -181,7 +181,12 @@ fun SkillSettingsItem(
 
         } else if (expanded) {
             if (skill.neededPermissions.isNotEmpty()) {
-                SkillSettingsItemPermissionLine(skill)
+                SkillSettingsItemPermissionLine(
+                    skill = skill,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                )
             }
 
             skill.renderSettings?.invoke()
@@ -205,7 +210,13 @@ private fun SkillSettingsItemHeader(
 
     Row(
         modifier = Modifier
-            .let { if (toggleExpanded != null) it.clickable(onClick = toggleExpanded) else it }
+            .let { it ->
+                if (toggleExpanded != null)
+                    it.clickable(onClick = toggleExpanded)
+                else
+                    // still group items together for better accessibility
+                    it.semantics(mergeDescendants = true) {}
+            }
             .padding(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -216,7 +227,8 @@ private fun SkillSettingsItemHeader(
         }
         Icon(
             painter = skill.icon(),
-            contentDescription = skill.name(LocalContext.current),
+            // no content description here as it would be duplicate with the text below
+            contentDescription = null,
             modifier = Modifier
                 .padding(start = 12.dp)
                 .size(24.dp),
@@ -236,7 +248,10 @@ private fun SkillSettingsItemHeader(
             color = maybeDisabledColor,
         )
         if (toggleExpanded != null) {
-            IconButton(onClick = toggleExpanded) {
+            IconButton(
+                onClick = toggleExpanded,
+                modifier = Modifier.testTag("expand_skill_settings_handle"),
+            ) {
                 Icon(
                     modifier = Modifier.rotate(expandedAnimation),
                     imageVector = Icons.Default.ArrowDropDown,
@@ -251,45 +266,34 @@ private fun SkillSettingsItemHeader(
 
 @Preview
 @Composable
-private fun SkillSettingsItemPermissionLine(@PreviewParameter(SkillInfoPreviews::class) skill: SkillInfo) {
-    var allPermissionsGranted by remember { mutableStateOf(true) }
-    val context = LocalContext.current
-    LaunchedEffect(skill.neededPermissions) {
-        allPermissionsGranted = PermissionUtils
-            .checkPermissions(context, *skill.neededPermissions.toTypedArray())
-    }
+fun SkillSettingsItemPermissionLine(
+    @PreviewParameter(SkillInfoPreviews::class) skill: SkillInfo,
+    modifier: Modifier = Modifier
+) {
+    val nonGrantedPermissions = if (LocalInspectionMode.current)
+        listOf() // can't use PermissionFlow in previews
+    else
+        getNonGrantedPermissions(skill.neededPermissions)
 
-    val needingPermissionsString = if (LocalInspectionMode.current) {
-        // getCommaJoinedPermissions doesn't work inside @Preview
-        "Requires these permissions: directly call contacts, whatever 123, test"
-    } else {
-        stringResource(
-            R.string.pref_skill_missing_permissions,
-            PermissionUtils.getCommaJoinedPermissions(LocalContext.current, skill)
-        )
-    }
+    val needingPermissionsString = stringResource(
+        R.string.pref_skill_missing_permissions,
+        commaJoinPermissions(LocalContext.current, skill.neededPermissions)
+    )
 
-    if (allPermissionsGranted) {
+    if (nonGrantedPermissions.isEmpty()) {
         Text(
             text = needingPermissionsString,
             textAlign = TextAlign.Center,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+            modifier = modifier,
         )
 
     } else {
-        val launcher = rememberLauncherForActivityResult(
-            ActivityResultContracts.RequestMultiplePermissions()
-        ) { isGranted ->
-            allPermissionsGranted = isGranted.values.all { it }
-        }
+        val launcher = rememberPermissionFlowRequestLauncher()
+        val context = LocalContext.current
 
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
+            modifier = modifier,
         ) {
             Text(
                 text = needingPermissionsString,
@@ -301,7 +305,7 @@ private fun SkillSettingsItemPermissionLine(@PreviewParameter(SkillInfoPreviews:
             )
 
             ElevatedButton(
-                onClick = { launcher.launch(skill.neededPermissions.toTypedArray()) },
+                onClick = { requestAnyPermission(launcher, context, nonGrantedPermissions) },
             ) {
                 Text(text = stringResource(R.string.pref_skill_grant_permissions))
             }
@@ -312,11 +316,14 @@ private fun SkillSettingsItemPermissionLine(@PreviewParameter(SkillInfoPreviews:
 @Preview
 @Composable
 private fun SkillSettingsItemPreview(@PreviewParameter(SkillInfoPreviews::class) skill: SkillInfo) {
+    var expanded by rememberSaveable { mutableStateOf(true) }
     SkillSettingsItem(
         skill = skill,
         isAvailable = true,
         enabled = false,
         setEnabled = {},
+        expanded = expanded,
+        toggleExpanded = { expanded = !expanded },
     )
 }
 

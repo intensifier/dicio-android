@@ -11,6 +11,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -18,7 +19,6 @@ import coil.compose.AsyncImage
 import org.dicio.skill.context.SkillContext
 import org.dicio.skill.skill.SkillOutput
 import org.stypox.dicio.R
-import org.stypox.dicio.io.graphical.Headline
 import org.stypox.dicio.io.graphical.HeadlineSpeechSkillOutput
 import org.stypox.dicio.util.getString
 import org.stypox.dicio.util.lowercaseCapitalized
@@ -29,20 +29,22 @@ sealed interface WeatherOutput : SkillOutput {
         val city: String,
         val description: String,
         val iconUrl: String,
-        val temp: Double,
-        val tempMin: Double,
-        val tempMax: Double,
-        val windSpeed: Double,
+        val temp: Double, // in Celsius
+        val tempMin: Double, // in Celsius
+        val tempMax: Double, // in Celsius
+        val tempString: String, // spoken, in temperatureUnit
+        val windSpeed: Double, // in m/s
+        val temperatureUnit: ResolvedTemperatureUnit,
+        val lengthUnit: ResolvedLengthUnit,
     ) : WeatherOutput {
         override fun getSpeechOutput(ctx: SkillContext): String = ctx.getString(
-            R.string.skill_weather_in_city_there_is_description, city, description
+            R.string.skill_weather_in_city_there_is_description, city, description, tempString
         )
 
         @Composable
         override fun GraphicalOutput(ctx: SkillContext) {
             CurrentWeatherRow(data = this)
         }
-
     }
 
     data class Failed(
@@ -57,6 +59,9 @@ sealed interface WeatherOutput : SkillOutput {
 
 @Composable
 fun CurrentWeatherRow(data: WeatherOutput.Success) {
+    val temperatureUnit = stringResource(data.temperatureUnit.unitString)
+    val speedUnit = stringResource(data.lengthUnit.speedUnitString)
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -80,7 +85,8 @@ fun CurrentWeatherRow(data: WeatherOutput.Success) {
                 text = stringResource(
                     R.string.skill_weather_description_temperature,
                     data.description.lowercaseCapitalized(Locale.getDefault()),
-                    data.temp
+                    data.temperatureUnit.convert(data.temp),
+                    temperatureUnit,
                 ),
                 textAlign = TextAlign.Center,
                 style = MaterialTheme.typography.bodyLarge,
@@ -89,7 +95,11 @@ fun CurrentWeatherRow(data: WeatherOutput.Success) {
             Text(
                 text = stringResource(
                     R.string.skill_weather_min_max_wind,
-                    data.tempMin, data.tempMax, data.windSpeed
+                    data.temperatureUnit.convert(data.tempMin),
+                    data.temperatureUnit.convert(data.tempMax),
+                    data.lengthUnit.convertSpeed(data.windSpeed),
+                    temperatureUnit,
+                    speedUnit
                 ),
                 textAlign = TextAlign.Center,
                 style = MaterialTheme.typography.bodySmall,
@@ -105,6 +115,7 @@ fun WeatherImage(iconUrl: String, description: String, widthFraction: Float) {
         contentDescription = description,
         modifier = Modifier
             .fillMaxWidth(widthFraction)
-            .aspectRatio(1.0f),
+            .aspectRatio(1.0f)
+            .testTag("weather_image"),
     )
 }

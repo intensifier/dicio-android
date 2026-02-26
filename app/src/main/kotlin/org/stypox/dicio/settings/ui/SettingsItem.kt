@@ -24,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.tooling.preview.datasource.LoremIpsum
@@ -36,16 +37,19 @@ fun SettingsItem(
     icon: ImageVector? = null,
     description: String? = null,
     content: (@Composable () -> Unit)? = null,
+    innerContent: (@Composable () -> Unit)? = null,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .semantics(mergeDescendants = true) {},
     ) {
         if (icon != null) {
             Icon(
                 imageVector = icon,
-                contentDescription = title,
+                // no content description here as it would be duplicate with the text below
+                contentDescription = null,
             )
             Spacer(modifier = Modifier.width(24.dp))
         }
@@ -66,6 +70,10 @@ fun SettingsItem(
                     text = description,
                     style = MaterialTheme.typography.bodyMedium,
                 )
+            }
+            if (innerContent != null) {
+                Spacer(modifier = Modifier.height(3.dp))
+                innerContent()
             }
         }
         if (content != null) {

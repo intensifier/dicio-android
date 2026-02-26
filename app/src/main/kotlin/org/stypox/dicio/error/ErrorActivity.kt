@@ -53,7 +53,7 @@ class ErrorActivity : BaseActivity() {
                     ShareUtils.shareText(this, getString(R.string.error_title), buildMarkdown())
                 },
                 onReport = {
-                    ShareUtils.openUrlInBrowser(this, ERROR_GITHUB_ISSUE_URL, false)
+                    ShareUtils.openUrlInBrowser(this, ERROR_GITHUB_ISSUE_URL)
                 },
                 onBack = {
                     finish()
@@ -99,7 +99,7 @@ class ErrorActivity : BaseActivity() {
         val CURRENT_TIMESTAMP_FORMATTER: DateTimeFormatter =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
 
-        private fun getOsInfo(): String {
+        fun getOsInfo(): String {
             val osBase = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
                 Build.VERSION.BASE_OS
             else

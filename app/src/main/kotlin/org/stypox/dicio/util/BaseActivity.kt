@@ -1,5 +1,6 @@
 package org.stypox.dicio.util
 
+import android.content.Intent
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
@@ -7,13 +8,20 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.ActivityResultLauncher
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.remember
 import androidx.datastore.core.DataStore
+import androidx.lifecycle.lifecycleScope
+import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import org.stypox.dicio.di.ActivityForResultManager
 import org.stypox.dicio.di.LocaleManager
+import org.stypox.dicio.di.LocaleManagerModule
 import org.stypox.dicio.settings.datastore.UserSettings
 import org.stypox.dicio.ui.theme.AppTheme
 import java.util.Locale
@@ -22,7 +30,10 @@ import javax.inject.Inject
 abstract class BaseActivity : ComponentActivity() {
 
     @Inject
-    lateinit var localeManager: LocaleManager
+    lateinit var activityForResultManager: ActivityForResultManager
+    // this launcher is kept here just to keep a reference to it, since ActivityForResultManager
+    // only holds a WeakReference
+    private lateinit var launcher: ActivityResultLauncher<Intent>
 
     @Inject
     lateinit var dataStore: DataStore<UserSettings>
@@ -35,6 +46,7 @@ abstract class BaseActivity : ComponentActivity() {
         for (resources in sequenceOf(resources, applicationContext.resources)) {
             val configuration = resources.configuration
             configuration.setLocale(locale)
+            @Suppress("DEPRECATION") // there is no other way to do this
             resources.updateConfiguration(configuration, resources.displayMetrics)
         }
     }
@@ -48,7 +60,22 @@ abstract class BaseActivity : ComponentActivity() {
             window.isNavigationBarContrastEnforced = false
         }
 
+        // can't use @Inject because Hilt initializes only when super.onCreate() is called
+        val localeManager =
+            EntryPointAccessors.fromApplication(this, LocaleManagerModule::class.java)
+        val (firstLocale, nextLocaleFlow) = localeManager.getLocaleManager().locale
+            .distinctUntilChangedBlockingFirst()
+        setLocale(firstLocale)
+        lifecycleScope.launch {
+            nextLocaleFlow.collect {
+                recreate()
+            }
+        }
+
         super.onCreate(savedInstanceState)
+
+        // this will only hold a weak reference, so no need to remove it afterwards
+        launcher = activityForResultManager.addLauncher(this)
     }
 
     /**
@@ -62,11 +89,10 @@ abstract class BaseActivity : ComponentActivity() {
      */
     fun composeSetContent(content: @Composable () -> Unit) {
         setContent {
-            val locale = localeManager.locale.collectAsState()
-            setLocale(locale.value)
-
-            val theme = dataStore.data
-                .map { Pair(it.theme, it.dynamicColors) }
+            val theme = remember {
+                dataStore.data
+                    .map { Pair(it.theme, it.dynamicColors) }
+            }
                 .collectAsState(
                     // run blocking, because we can't start the app if we don't know the theme
                     initial = runBlocking {

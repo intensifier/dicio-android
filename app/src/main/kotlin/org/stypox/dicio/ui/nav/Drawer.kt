@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
@@ -22,8 +23,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -32,7 +35,8 @@ import org.stypox.dicio.R
 @Composable
 fun DrawerContent(
     onSettingsClick: () -> Unit,
-    onSpeechToTextServiceClick: () -> Unit,
+    onAboutClick: () -> Unit,
+    onSpeechToTextPopupClick: () -> Unit,
     closeDrawer: () -> Unit,
 ) {
     ModalDrawerSheet(
@@ -51,14 +55,26 @@ fun DrawerContent(
                 onSettingsClick()
                 closeDrawer()
             },
-            modifier = Modifier.padding(horizontal = 12.dp),
+            modifier = Modifier
+                .padding(horizontal = 12.dp)
+                .testTag("settings_drawer_item"),
         )
 
         DrawerItem(
             icon = Icons.Default.RecordVoiceOver,
-            label = R.string.stt_service,
+            label = R.string.stt_popup,
             onClick = {
-                onSpeechToTextServiceClick()
+                onSpeechToTextPopupClick()
+                closeDrawer()
+            },
+            modifier = Modifier.padding(horizontal = 12.dp),
+        )
+
+        DrawerItem(
+            icon = Icons.Default.Info,
+            label = R.string.about,
+            onClick = {
+                onAboutClick()
                 closeDrawer()
             },
             modifier = Modifier.padding(horizontal = 12.dp),
@@ -69,7 +85,7 @@ fun DrawerContent(
 @Preview
 @Composable
 private fun DrawerContentPreview() {
-    DrawerContent(onSettingsClick = {}, onSpeechToTextServiceClick = {}, closeDrawer = {})
+    DrawerContent(onSettingsClick = {}, onAboutClick = {}, onSpeechToTextPopupClick = {}, closeDrawer = {})
 }
 
 @Preview
@@ -78,7 +94,7 @@ private fun DrawerHeader(modifier: Modifier = Modifier) {
     Surface(
         shape = MaterialTheme.shapes.extraLarge,
         color = MaterialTheme.colorScheme.primary,
-        modifier = modifier
+        modifier = modifier.clearAndSetSemantics {}
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -92,6 +108,7 @@ private fun DrawerHeader(modifier: Modifier = Modifier) {
                     text = stringResource(R.string.app_name),
                     style = MaterialTheme.typography.headlineMedium,
                     color = MaterialTheme.colorScheme.onPrimary,
+                    maxLines = 1,
                 )
                 Text(
                     text = stringResource(R.string.drawer_header_subtitle),

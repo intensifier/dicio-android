@@ -16,17 +16,17 @@ The launcher icon can be generated using [IconKitchen](https://icon.kitchen). Th
 - **Effect: Drop shadow**
 - **Padding: 17%**
 - Background type: Color
-- **Bakcground color: `#daec21`** from above
+- **Background color: `#daec21`** from above
 - Texture: None
 - Badge: none
 - Filename: none (defaults to `ic_launcher`)
 - **Shape: Squircle**
 - Themed: no
 
-## Generating the STT service icon
+## Generating the STT popup icon
 
 These are the IconKitchen parameters:
 - **Icon: Clipart**, then search and select the `record_voice_over` icon
 - **Color: `#006800`** from above
-- **Filename: `ic_stt_service`**
+- **Filename: `ic_stt_popup`**
 - everything else is the same as the launcher icon (starting from *Effect*)

@@ -40,6 +40,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.takeOrElse
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
@@ -73,7 +74,10 @@ fun AppBarBackIcon(onBackClick: () -> Unit) {
 
 @Composable
 fun AppBarDrawerIcon(onDrawerClick: () -> Unit, isClosed: Boolean) {
-    IconButton(onClick = onDrawerClick) {
+    IconButton(
+        onClick = onDrawerClick,
+        modifier = Modifier.testTag("drawer_handle"),
+    ) {
         Icon(
             imageVector = Icons.Filled.Menu,
             contentDescription = stringResource(
@@ -118,7 +122,7 @@ fun AppBarTextField(
     )
 
     // request focus when this composable is first initialized
-    val focusRequester = FocusRequester()
+    val focusRequester = remember { FocusRequester() }
     SideEffect {
         focusRequester.requestFocus()
     }

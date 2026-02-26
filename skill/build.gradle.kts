@@ -1,40 +1,35 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     alias(libs.plugins.com.android.library)
     alias(libs.plugins.org.jetbrains.kotlin.android)
+    alias(libs.plugins.org.jetbrains.kotlin.plugin.compose)
     id("maven-publish")
 }
 
 android {
     namespace = "org.dicio.skill"
-    compileSdk = 34
+    compileSdk = libs.versions.compileSdk.get().toInt()
     defaultConfig {
-        minSdk = 21
+        minSdk = libs.versions.minSdk.get().toInt()
     }
+
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        // Flag to enable support for the new language APIs (needed for dicio-numbers LocalDateTime)
+        isCoreLibraryDesugaringEnabled = true
+
+        sourceCompatibility = JavaVersion.toVersion(libs.versions.java.get())
+        targetCompatibility = JavaVersion.toVersion(libs.versions.java.get())
     }
-    kotlinOptions {
-        jvmTarget = "17"
+
+    kotlin {
+        compilerOptions {
+            jvmTarget = JvmTarget.fromTarget(libs.versions.java.get())
+        }
     }
+
     buildFeatures {
         compose = true
-    }
-    composeOptions {
-        kotlinCompilerExtensionVersion = libs.versions.composeKotlinCompilerExtension.get()
-    }
-}
-
-afterEvaluate {
-    publishing {
-        publications {
-            create<MavenPublication>("release") {
-                from(components["release"])
-
-                groupId = "com.github.Stypox"
-                artifactId = "dicio-skill"
-            }
-        }
     }
 }
 
@@ -43,6 +38,9 @@ tasks.withType<Test>().configureEach {
 }
 
 dependencies {
+    // Desugaring (needed for dicio-numbers LocalDateTime)
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
+
     // dicio-numbers is needed to bring ParserFormatter into the classpath
     implementation(libs.dicio.numbers)
 
